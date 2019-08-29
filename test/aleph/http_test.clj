@@ -382,15 +382,27 @@
       (is (re-find #"java\.lang\.IllegalArgumentException: code: -100 \(expected: >= 0\)"
                    (bs/to-string body)))))
   (testing "custom error handler"
-    (with-server (http/start-server invalid-handler
-                                    {:port port
-                                     :error-handler (fn [_]
-                                                      {:status 500
-                                                       :body "Internal error"})})
-      (let [{:keys [body status]} @(http-get (apply str "http://localhost:" port  "/invalid"))]
-        (is (= 500 status))
-        (is (= "Internal error"
-               (bs/to-string body)))))))
+    (let [handler-args (atom nil)
+          handler (fn f
+                    ([e req] (f e req nil))
+                    ([e req rsp]
+                     (reset! handler-args {:e e
+                                           :req req
+                                           :rsp rsp})
+                     {:status 500
+                      :body "Internal error"}))]
+      (with-server (http/start-server invalid-handler
+                                      {:port port
+                                       :error-handler handler})
+        (let [{:keys [body status]} @(http-get (apply str "http://localhost:" port  "/invalid"))
+              {:keys [e req rsp]} @handler-args]
+          (is (= 500 status))
+          (is (= "Internal error"
+                 (bs/to-string body)))
+          (is (instance? Throwable e))
+          (is (= "/invalid" (:uri req)))
+          (is (= {:status -100, :body "hello"}
+                 rsp)))))))
 
 ;;;
 

@@ -102,13 +102,15 @@
         TimeUnit/MILLISECONDS)
       (.get ref))))
 
-(defn error-response [^Throwable e]
-  (log/error e "error in HTTP handler")
-  {:status 500
-   :headers {"content-type" "text/plain"}
-   :body (let [w (java.io.StringWriter.)]
-           (.printStackTrace e (java.io.PrintWriter. w))
-           (str w))})
+(defn error-response
+  ([e req] (error-response e req nil))
+  ([^Throwable e _req _rsp]
+   (log/error e "error in HTTP handler")
+   {:status 500
+    :headers {"content-type" "text/plain"}
+    :body (let [w (java.io.StringWriter.)]
+            (.printStackTrace e (java.io.PrintWriter. w))
+            (str w))}))
 
 (let [[server-name connection-name date-name]
       (map #(HttpHeaders/newEntity %) ["Server" "Connection" "Date"])
@@ -116,13 +118,13 @@
       [server-value keep-alive-value close-value]
       (map #(HttpHeaders/newEntity %) ["Aleph/0.4.6" "Keep-Alive" "Close"])]
   (defn send-response
-    [^ChannelHandlerContext ctx keep-alive? ssl? error-handler rsp]
+    [^ChannelHandlerContext ctx req keep-alive? ssl? error-handler rsp]
     (let [[^HttpResponse rsp body]
           (try
             [(http/ring-response->netty-response rsp)
              (get rsp :body)]
             (catch Throwable e
-              (let [rsp (error-handler e)]
+              (let [rsp (error-handler e req rsp)]
                 [(http/ring-response->netty-response rsp)
                  (get rsp :body)])))]
 
@@ -173,7 +175,7 @@
                     (try
                       (rejected-handler req')
                       (catch Throwable e
-                        (error-handler e)))
+                        (error-handler e req')))
                     {:status 503
                      :headers {"content-type" "text/plain"}
                      :body "503 Service Unavailable"})))
@@ -182,7 +184,7 @@
               (try
                 (handler req')
                 (catch Throwable e
-                  (error-handler e))))]
+                  (error-handler e req'))))]
 
     (-> previous-response
       (d/chain'
@@ -190,11 +192,11 @@
         (fn [_]
           (netty/release req)
           (-> rsp
-            (d/catch' error-handler)
+            (d/catch' #(error-handler % req'))
             (d/chain'
               (fn [rsp]
                 (when (not (-> req' ^AtomicBoolean (.websocket?) .get))
-                  (send-response ctx keep-alive? ssl? error-handler
+                  (send-response ctx req' keep-alive? ssl? error-handler
                     (cond
 
                       (map? rsp)
@@ -206,7 +208,7 @@
                       {:status 204}
 
                       :else
-                      (error-handler (invalid-value-exception req rsp)))))))))))))
+                      (error-handler (invalid-value-exception req rsp) req rsp))))))))))))
 
 (defn exception-handler [ctx ex]
   (when-not (instance? IOException ex)
