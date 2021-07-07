@@ -1,4 +1,8 @@
-<img src="/docs/aleph.png" align="left" height="210px" hspace="5px"/>
+[![Clojars Project](https://img.shields.io/clojars/v/aleph.svg)](https://clojars.org/aleph)
+[![cljdoc badge](https://cljdoc.org/badge/aleph)](https://cljdoc.org/d/aleph)
+[![CircleCI](https://circleci.com/gh/clj-commons/aleph.svg?style=svg)](https://circleci.com/gh/clj-commons/aleph)
+
+![](docs/aleph.png)
 
 Aleph exposes data from the network as a [Manifold](https://github.com/ztellman/manifold) stream, which can easily be transformed into a `java.io.InputStream`, [core.async](https://github.com/clojure/core.async) channel, Clojure sequence, or [many other byte representations](https://github.com/ztellman/byte-streams).  It exposes simple default wrappers for HTTP, TCP, and UDP, but allows access to full performance and flexibility of the underlying [Netty](https://github.com/netty/netty) library.
 
@@ -116,6 +120,6 @@ To learn more, [read the documentation](http://aleph.io/examples/literate.html).
 
 ### license
 
-Copyright © 2010-2018 Zachary Tellman
+Copyright © 2010-2020 Zachary Tellman
 
 Distributed under the MIT License

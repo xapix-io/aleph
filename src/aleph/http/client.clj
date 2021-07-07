@@ -455,6 +455,17 @@
      :url "http://example.com"
      ::close true}))
 
+;; includes host into URI for requests that go through proxy
+(defn req->proxy-url [{:keys [uri] :as req}]
+  (let [^URI uri' (req->domain req)]
+    (.toString (URI. (.getScheme uri')
+                     nil
+                     (.getHost uri')
+                     (.getPort uri')
+                     uri
+                     nil
+                     nil))))
+
 (defn http-connection
   [^InetSocketAddress remote-address
    ssl?
@@ -481,6 +492,12 @@
         host (.getHostName remote-address)
         port (.getPort remote-address)
         explicit-port? (and (pos? port) (not= port (if ssl? 443 80)))
+        proxy-options' (when (some? proxy-options)
+                         (assoc proxy-options :ssl? ssl?))
+        non-tunnel-proxy? (non-tunnel-proxy? proxy-options')
+        keep-alive?' (or keep-alive? (when (some? proxy-options)
+                                       (get proxy-options :keep-alive? true)))
+        host-header-value (str host (when explicit-port? (str ":" port)))
         c (netty/create-client
             (pipeline-builder responses (assoc options :ssl? ssl?))
             (when ssl?
@@ -498,22 +515,15 @@
 
         (s/consume
           (fn [req]
-
             (try
-              (let [proxy-options' (when (some? proxy-options)
-                                     (assoc proxy-options :ssl? ssl?))
-                    ^HttpRequest req' (http/ring-request->netty-request
-                                        (if (non-tunnel-proxy? proxy-options')
-                                          (assoc req :uri (:request-url req))
+              (let [^HttpRequest req' (http/ring-request->netty-request
+                                        (if non-tunnel-proxy?
+                                          (assoc req :uri (req->proxy-url req))
                                           req))]
                 (when-not (.get (.headers req') "Host")
-                  (.set (.headers req') HttpHeaderNames/HOST (str host (when explicit-port? (str ":" port)))))
+                  (.set (.headers req') HttpHeaderNames/HOST host-header-value))
                 (when-not (.get (.headers req') "Connection")
-                  (HttpUtil/setKeepAlive req' keep-alive?))
-                (when (and (non-tunnel-proxy? proxy-options')
-                        (get proxy-options :keep-alive? true)
-                        (not (.get (.headers req') "Proxy-Connection")))
-                  (.set (.headers req') "Proxy-Connection" "Keep-Alive"))
+                  (HttpUtil/setKeepAlive req' keep-alive?'))
 
                 (let [body (:body req)
                       parts (:multipart req)
