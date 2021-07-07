@@ -102,13 +102,15 @@
         TimeUnit/MILLISECONDS)
       (.get ref))))
 
-(defn error-response [^Throwable e]
-  (log/error e "error in HTTP handler")
-  {:status 500
-   :headers {"content-type" "text/plain"}
-   :body (let [w (java.io.StringWriter.)]
-           (.printStackTrace e (java.io.PrintWriter. w))
-           (str w))})
+(defn error-response
+  ([e req] (error-response e req nil))
+  ([^Throwable e _req _rsp]
+   (log/error e "error in HTTP handler")
+   {:status 500
+    :headers {"content-type" "text/plain"}
+    :body (let [w (java.io.StringWriter.)]
+            (.printStackTrace e (java.io.PrintWriter. w))
+            (str w))}))
 
 (let [[server-name connection-name date-name]
       (map #(HttpHeaders/newEntity %) ["Server" "Connection" "Date"])
@@ -116,13 +118,13 @@
       [server-value keep-alive-value close-value]
       (map #(HttpHeaders/newEntity %) ["Aleph/0.4.6" "Keep-Alive" "Close"])]
   (defn send-response
-    [^ChannelHandlerContext ctx keep-alive? ssl? rsp]
+    [^ChannelHandlerContext ctx req keep-alive? ssl? error-handler rsp]
     (let [[^HttpResponse rsp body]
           (try
             [(http/ring-response->netty-response rsp)
              (get rsp :body)]
             (catch Throwable e
-              (let [rsp (error-response e)]
+              (let [rsp (error-handler e req rsp)]
                 [(http/ring-response->netty-response rsp)
                  (get rsp :body)])))]
 
@@ -141,20 +143,20 @@
 
 ;;;
 
-(defn invalid-value-response [req x]
-  (error-response
-    (IllegalArgumentException.
-      (str "cannot treat "
+(defn invalid-value-exception [req x]
+  (IllegalArgumentException.
+   (str "cannot treat "
         (pr-str x)
         " as HTTP response for request to '"
         (:uri req)
-        "'"))))
+        "'")))
 
 (defn handle-request
   [^ChannelHandlerContext ctx
    ssl?
    handler
    rejected-handler
+   error-handler
    executor
    ^HttpRequest req
    previous-response
@@ -173,7 +175,7 @@
                     (try
                       (rejected-handler req')
                       (catch Throwable e
-                        (error-response e)))
+                        (error-handler e req')))
                     {:status 503
                      :headers {"content-type" "text/plain"}
                      :body "503 Service Unavailable"})))
@@ -182,7 +184,7 @@
               (try
                 (handler req')
                 (catch Throwable e
-                  (error-response e))))]
+                  (error-handler e req'))))]
 
     (-> previous-response
       (d/chain'
@@ -190,11 +192,11 @@
         (fn [_]
           (netty/release req)
           (-> rsp
-            (d/catch' error-response)
+            (d/catch' #(error-handler % req'))
             (d/chain'
               (fn [rsp]
                 (when (not (-> req' ^AtomicBoolean (.websocket?) .get))
-                  (send-response ctx keep-alive? ssl?
+                  (send-response ctx req' keep-alive? ssl? error-handler
                     (cond
 
                       (map? rsp)
@@ -206,7 +208,7 @@
                       {:status 204}
 
                       :else
-                      (invalid-value-response req rsp))))))))))))
+                      (error-handler (invalid-value-exception req rsp) req rsp))))))))))))
 
 (defn exception-handler [ctx ex]
   (when-not (instance? IOException ex)
@@ -226,7 +228,7 @@
     (fn [_] (netty/close ctx))))
 
 (defn ring-handler
-  [ssl? handler rejected-handler executor buffer-capacity]
+  [ssl? handler rejected-handler error-handler executor buffer-capacity]
   (let [buffer-capacity (long buffer-capacity)
         request (atom nil)
         buffer (atom [])
@@ -242,6 +244,7 @@
               ssl?
               handler
               rejected-handler
+              error-handler
               executor
               req
               @previous-response
@@ -348,7 +351,7 @@
           (.fireChannelRead ctx msg))))))
 
 (defn raw-ring-handler
-  [ssl? handler rejected-handler executor buffer-capacity]
+  [ssl? handler rejected-handler error-handler executor buffer-capacity]
   (let [buffer-capacity (long buffer-capacity)
         stream (atom nil)
         previous-response (atom nil)
@@ -361,6 +364,7 @@
               ssl?
               handler
               rejected-handler
+              error-handler
               executor
               req
               @previous-response
@@ -459,6 +463,7 @@
    {:keys
     [executor
      rejected-handler
+     error-handler
      request-buffer-size
      max-initial-line-length
      max-header-size
@@ -476,11 +481,12 @@
      max-header-size 8192
      max-chunk-size 16384
      compression? false
-     idle-timeout 0}}]
+     idle-timeout 0
+     error-handler error-response}}]
   (fn [^ChannelPipeline pipeline]
     (let [handler (if raw-stream?
-                    (raw-ring-handler ssl? handler rejected-handler executor request-buffer-size)
-                    (ring-handler ssl? handler rejected-handler executor request-buffer-size))
+                    (raw-ring-handler ssl? handler rejected-handler error-handler executor request-buffer-size)
+                    (ring-handler ssl? handler rejected-handler error-handler executor request-buffer-size))
           ^ChannelHandler
           continue-handler (if (nil? continue-handler)
                              (HttpServerExpectContinueHandler.)
